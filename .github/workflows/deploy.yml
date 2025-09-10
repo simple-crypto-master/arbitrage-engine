@@ -2,10 +2,7 @@ name: 🚀 Arbitrage Engine Deployment
 
 on:
   push:
-    branches: [ main ]
-    paths:
-      - 'arbitrage-engine/**'
-      - '.github/workflows/arbitrage-engine.yml'
+    branches: [ master ]
   workflow_dispatch:
     inputs:
       force_deploy:
