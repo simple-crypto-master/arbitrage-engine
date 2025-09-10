@@ -1,66 +1,140 @@
-name: 🔄 Arbitrage Engine Deployment
+name: 🚀 Arbitrage Engine Deployment
 
 on:
   push:
-    branches: [main, master]
+    branches: [ main ]
+    paths:
+      - 'arbitrage-engine/**'
+      - '.github/workflows/arbitrage-engine.yml'
   workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deploy even without arbitrage-engine changes'
+        required: false
+        default: false
+        type: boolean
 
-permissions:
-  contents: read
-  packages: write
+env:
+  SERVICE_NAME: arbitrage-engine
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
+  VPS_IP: ${{ secrets.VPS_IP }}
+  VPS_USER: ${{ secrets.VPS_USER }}
+  VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
 
 jobs:
-  deploy:
+  deploy-arbitrage-engine:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 📥 Checkout
-      uses: actions/checkout@v4
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: 🔐 Login to GHCR
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 🔐 Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: 🏗️ Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: true
-        tags: |
-          ghcr.io/${{ github.repository_owner }}/arbitrage-engine:latest
-          ghcr.io/${{ github.repository_owner }}/arbitrage-engine:${{ github.sha }}
+      - name: 🏗️ Build and push Arbitrage Engine Image
+        working-directory: arbitrage-engine
+        run: |
+          # Build image
+          docker build -t ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:latest .
+          docker build -t ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:${{ github.sha }} .
+          
+          # Push images
+          docker push ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:latest
+          docker push ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
 
-    - name: 🚀 Deploy to VPS
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.VPS_HOST }}
-        username: ${{ secrets.VPS_USER }}
-        key: ${{ secrets.VPS_SSH_KEY }}
-        script: |
-          echo "🚀 Starting arbitrage-engine deployment..."
+      - name: 🚀 Deploy Arbitrage Engine to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_IP }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "🚀 Deploying Arbitrage Engine to VPS..."
 
-          # Login to GHCR
-          echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            # Source production secrets
+            source /root/.mansa-secrets || echo "No secrets file found"
 
-          # Pull latest image
-          docker pull ghcr.io/${{ github.repository_owner }}/arbitrage-engine:latest
+            # Login to GHCR on VPS
+            echo "🔐 Logging into GHCR..."
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-          # Stop existing container
-          docker stop arbitrage-engine || echo "Container not running"
-          docker rm arbitrage-engine || echo "Container not found"
+            echo "📥 Pulling latest images from registry..."
+            docker pull ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:latest
 
-          # Start new container
-          docker run -d \
-            --name arbitrage-engine \
-            --network mansa-musa-network \
-            --restart unless-stopped \
-            --expose 8002 \
-            --expose 50053 \
-            -e DATABASE_URL='postgresql://jkvuky:rUSWdvUBI2E3HyfQws@sk417178-002.eu.clouddb.ovh.net:35412/crypto' \
-            -e REDIS_URL=redis://redis:6379 \
-            ghcr.io/${{ github.repository_owner }}/arbitrage-engine:latest
+            echo "🔄 Restarting Arbitrage Engine service..."
+            docker stop ${{ env.SERVICE_NAME }} || echo "Service not running"
+            docker rm ${{ env.SERVICE_NAME }} || echo "Service not found"
 
-          echo "✅ Arbitrage Engine deployment complete!"
+            echo "🐳 Starting Arbitrage Engine container..."
+            docker run -d \
+              --name ${{ env.SERVICE_NAME }} \
+              --network mansa-musa-network \
+              --restart unless-stopped \
+              --expose 8002 \
+              --expose 50053 \
+              --env-file /home/ubuntu/.secrets/production.env \
+              ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:latest
+
+            echo "⏳ Waiting for container to start..."
+            timeout 30 bash -c 'until docker ps | grep -q ${{ env.SERVICE_NAME }}; do sleep 5; echo "Checking..."; done' || echo "Container startup timeout"
+
+            echo "📊 Checking container status..."
+            docker ps | grep ${{ env.SERVICE_NAME }}
+
+            echo "📋 Checking container logs..."
+            docker logs ${{ env.SERVICE_NAME }} --tail 10 || echo "No logs available"
+
+            echo "✅ Advanced OMS deployment complete!"
+
+      - name: ✅ Verify deployment
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_IP }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            echo "🔍 Verifying deployment..."
+
+            # Check if Advanced OMS container is running
+            if docker ps | grep -q ${{ env.SERVICE_NAME }}; then
+              echo "✅ Advanced OMS container is running!"
+              echo "📋 Recent logs:"
+              docker logs ${{ env.SERVICE_NAME }} --tail 5
+            else
+              echo "❌ Advanced OMS container is not running"
+              docker ps -a | grep ${{ env.SERVICE_NAME }} || echo "Container not found"
+            fi
+
+            echo "📊 All containers status:"
+            docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+
+            echo "📈 Deployment summary:"
+            echo "- Image: ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:latest"
+            echo "- Commit: ${{ github.sha }}"
+            echo "- Service: Background process"
+
+# ============================================================================
+# ADVANCED OMS SECRETS NEEDED:
+# ============================================================================
+#
+# 🔑 Core Configuration:
+# • VPS_SSH_KEY - SSH access to VPS
+# • VPS_IP - VPS IP address (51.68.45.227)
+# • VPS_USER - VPS username (ubuntu)
+#
+# 🔐 Container Registry:
+# • GITHUB_TOKEN - Automatycznie dostępny w GitHub Actions (nie wymaga dodatkowej konfiguracji)
+#
+# 🗄️ Database & Cache:
+# • DATABASE_URL - PostgreSQL/TimescaleDB connection
+# • REDIS_URL - Redis connection (redis://redis:6379)
+#
+# 📝 Logging & Monitoring:
+# • LOG_LEVEL - INFO
+#
+# ============================================================================
