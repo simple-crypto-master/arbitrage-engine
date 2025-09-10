@@ -37,7 +37,6 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 🏗️ Build and push Arbitrage Engine Image
-        working-directory: arbitrage-engine
         run: |
           # Build image
           docker build -t ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}:latest .
